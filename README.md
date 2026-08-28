@@ -8,6 +8,10 @@ Auto-highlights values if they represent code.
 
 ## Release Notes
 
+### 0.1.1
+
+Fixed display name to show `Propeties Viewer`
+
 ### 0.1.0
 
 Initial release of viewer
