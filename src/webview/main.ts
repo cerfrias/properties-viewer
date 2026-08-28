@@ -2,8 +2,17 @@ import './style.css';
 import hljs from 'highlight.js';
 import 'highlight.js/styles/vs2015.css';
 
+type WebviewMessage =
+    | { type: 'UPDATE_ENTRY'; lineIdx: number; value: string }
+    | { type: 'UPDATE_KEY'; lineIdx: number; newKey: string }
+    | { type: 'ADD_ENTRY'; key: string; value: string }
+    | { type: 'DELETE_LINE'; lineIdx: number }
+    | { type: 'UPDATE_COMMENT'; lineIdx: number; value: string }
+    | { type: 'ADD_COMMENT'; comment: string }
+    | { type: 'MOVE_ENTRY'; sourceIdx: number; targetIdx: number; insertAfter: boolean };
+
 declare function acquireVsCodeApi(): {
-    postMessage(message: unknown): void;
+    postMessage(message: WebviewMessage): void;
 };
 
 const vscode = acquireVsCodeApi();
@@ -12,100 +21,68 @@ const addBtn = document.getElementById('add-btn')!;
 const addCommentBtn = document.getElementById('add-comment-btn')!;
 
 addBtn.addEventListener('click', (e) => {
-    // Generamos una clave única.
-    const uniqueKey = `new_key_${Math.floor(Math.random() * 10000)}`;
-    vscode.postMessage({ type: 'ADD_ENTRY', key: uniqueKey, value: '' });
+    // Ahora admite claves duplicadas
+    vscode.postMessage({ type: 'ADD_ENTRY', key: "key", value: 'value' });
 });
 
 addCommentBtn.addEventListener('click', () => {
     vscode.postMessage({ type: 'ADD_COMMENT', comment: "# " });
 });
 
-interface timeoutMDKey {
-    id: number;
-    type: "KEY";
-    oldKey: string;
-    newKey: string;
-}
+type tmType = "KEY" | "VALUE" | "COMMENT";
 
-interface timeoutMDValue {
+interface timeoutMD {
     id: number;
-    type: "VALUE";
-    key: string;
+    type: tmType;
+    lineIdx: number;
     value: string;
 }
 
-interface timeoutMDComment {
-    id: number;
-    type: "COMMENT";
-    commentKey: string;
-    newValue: string;
-}
-
-type tmType = "KEY" | "VALUE" | "COMMENT";
-
 // --- 1. TimeoutManager optimizado ---
 class timeoutManager {
-    private timeoutskey = new Map<string, timeoutMDKey>();
-    private timeoutsvalue = new Map<string, timeoutMDValue>();
-    private timeoutscomment = new Map<string, timeoutMDComment>();
+    private timeouts = new Map<string, timeoutMD>();
 
-    constructor() {}
-
-    private set(type: "KEY", tmId: number, oldKey: string, newKey: string): void;
-    private set(type: "VALUE", tmId: number, key: string, value: string): void;
-    private set(type: "COMMENT", tmId: number, commentKey: string, newValue: string): void;
-    private set(type: tmType, tmId: number, name: string, arg: string) {
-        if (type === "KEY") {
-            this.timeoutskey.set(name, { id: tmId, type, oldKey: name, newKey: arg });
-        } else if (type === "VALUE") {
-            this.timeoutsvalue.set(name, { id: tmId, type, key: name, value: arg });
-        } else {
-            this.timeoutscomment.set(name, { id: tmId, type, commentKey: name, newValue: arg });
-        }
+    private key(type: tmType, lineIdx: number): string {
+        return `${type}:${lineIdx}`;
     }
 
-    public renameKey(originalKey: string, newKey: string) {
-        clearTimeout(this.timeoutskey.get(originalKey)?.id);
+    private set(type: tmType, tmId: number, lineIdx: number, value: string) {
+        this.timeouts.set(this.key(type, lineIdx), { id: tmId, type, lineIdx, value });
+    }
 
-        // Migramos los guardados pendientes del valor de la clave vieja a la nueva
-        const oldtm = this.timeoutsvalue.get(originalKey);
-        if (oldtm) {
-            clearTimeout(oldtm.id);
-            this.timeoutsvalue.delete(originalKey);
-            this.saveValue(newKey, oldtm.value);
-        }
+    public renameKey(lineIdx: number, newKey: string) {
+        clearTimeout(this.timeouts.get(this.key("KEY", lineIdx))?.id);
 
         this.set("KEY",
             window.setTimeout(() => {
-                vscode.postMessage({ type: 'UPDATE_KEY', oldKey: originalKey, newKey });
+                vscode.postMessage({ type: 'UPDATE_KEY', lineIdx, newKey });
             }, 400),
-            originalKey,
+            lineIdx,
             newKey
         );
     }
 
-    public saveValue(key: string, value: string) {
-        clearTimeout(this.timeoutsvalue.get(key)?.id);
+    public saveValue(lineIdx: number, value: string) {
+        clearTimeout(this.timeouts.get(this.key("VALUE", lineIdx))?.id);
+
         this.set("VALUE",
             window.setTimeout(() => {
-                vscode.postMessage({ type: 'UPDATE_ENTRY', key, value });
+                vscode.postMessage({ type: 'UPDATE_ENTRY', lineIdx, value });
             }, 300),
-            key,
+            lineIdx,
             value
         );
     }
 
-    public saveComment(commentIdx: string, newValue: string) {
-
-        clearTimeout(this.timeoutscomment.get(commentIdx)?.id);
+    public saveComment(lineIdx: number, value: string) {
+        clearTimeout(this.timeouts.get(this.key("COMMENT", lineIdx))?.id);
 
         this.set("COMMENT",
             window.setTimeout(() => {
-                vscode.postMessage({ type: 'UPDATE_COMMENT', commentIdx, newValue });
+                vscode.postMessage({ type: 'UPDATE_COMMENT', lineIdx, value });
             }, 300),
-            commentIdx,
-            newValue
+            lineIdx,
+            value
         );
     }
 }
@@ -113,14 +90,14 @@ class timeoutManager {
 const TM = new timeoutManager();
 
 // --- 2. renderTable y eventos del Input ajustados ---
-function renderTable(entries: Record<string, string>) {
+function renderTable(entries: [number, string, string][]) {
     app.innerHTML = `
     <table>
       <thead>
         <tr><th></th><th>Key</th><th>Value</th><th></th></tr>
       </thead>
       <tbody>
-        ${Object.entries(entries).map(([k, v]) => {
+        ${entries.map(([idx, k, v]) => {
         const displayValue = unescapeValue(v);
         let textToHighlight = displayValue;
         if (textToHighlight.endsWith('\n')) { textToHighlight += ' '; }
@@ -129,35 +106,32 @@ function renderTable(entries: Record<string, string>) {
         const highlightedText = result.value || escapeHtml(textToHighlight);
 
         return `
-            <tr data-rowkey="${k}">
+            <tr data-key="${escapeHtml(k)}" data-idx="${idx}">
               <!-- Manillar de arrastre común para toda la fila -->
-              <td class="drag-handle" data-key="${k}">⠿</td>
+              <td class="drag-handle" data-idx="${idx}">⠿</td>
             
-              ${k.startsWith("#") ?
+              ${k === "#" ?
                 `
                 <!-- Comentario con colspan="2" para ocupar el ancho de Key y Value -->
                 <td colspan="2" class="comment-cell">
-                  <input class="comment-input" data-commentkey="${k}" type="text" value="${escapeHtml(displayValue)}">
-                </td>
-                <td class="action-cell">
-                  <button class="delete-btn" data-commentkey="${k}" title="Delete Row">✕</button>
+                  <input class="comment-input" data-idx="${idx}" type="text" value="${escapeHtml(displayValue)}">
                 </td>
                 `
                 :
                 `
                 <!-- Fila normal de Key / Value -->
-                <td><input type="text" data-key="${k}" value="${k}"></td>
+                <td><input type="text" data-key="${escapeHtml(k)}" value="${escapeHtml(k)}"></td>
                 <td>
                   <div class="editor-wrapper">
-                    <textarea data-key="${k}" spellcheck="false" rows="1">${escapeHtml(displayValue)}</textarea>
+                    <textarea data-idx="${idx}" spellcheck="false" rows="1">${escapeHtml(displayValue)}</textarea>
                     <pre aria-hidden="true"><code class="hljs ${result.language || ''}">${highlightedText}</code></pre>
                   </div>
                 </td>
-                <td class="action-cell">
-                  <button class="delete-btn" data-key="${k}" title="Delete Row">✕</button>
-                </td>
                 `
             }
+                <td class="action-cell">
+                  <button class="delete-btn" data-idx="${idx}" title="Delete Row">✕</button>
+                </td>
             </tr>
           `;
     }).join('')}
@@ -193,37 +167,17 @@ function renderTable(entries: Record<string, string>) {
 
         ta.addEventListener('input', () => {
             syncHighlight(ta);
-            TM.saveValue(ta.dataset.key!, escapeValue(ta.value));
+            TM.saveValue(Number.parseInt(ta.dataset.idx!), escapeValue(ta.value));
         });
     });
 
     app.querySelectorAll('input[type="text"]:not(.comment-input)').forEach((ti: Element) => {
         const inputEl = ti as HTMLInputElement;
 
-        // Al enfocar, guardamos la clave inicial para el renombrado
-        inputEl.addEventListener('focus', () => {
-            inputEl.dataset.original = inputEl.value;
-        });
-
         inputEl.addEventListener('input', () => {
-            const original = inputEl.dataset.original!;
-            const next = inputEl.value;
-            const current = inputEl.dataset.current || original;
-
-            // Actualizamos la referencia interna del textarea que le acompaña
-            const ta = app.querySelector(`textarea[data-key="${current}"]`) as HTMLTextAreaElement;
-            if (ta) { ta.dataset.key = next; }
-
-            inputEl.dataset.key = next;
-            inputEl.dataset.current = next;
-
-            // Siempre enviamos el renombrado desde la clave original a la actual
-            TM.renameKey(original, next);
-        });
-
-        inputEl.addEventListener('blur', () => {
-            inputEl.dataset.original = inputEl.value;
-            delete inputEl.dataset.current;
+            TM.renameKey(
+                Number.parseInt(inputEl.dataset.idx!),
+                inputEl.value);
         });
     });
 
@@ -251,19 +205,17 @@ function renderTable(entries: Record<string, string>) {
         });
 
         ti.addEventListener('input', () => {
-            TM.saveComment(ti.dataset.commentkey!, escapeValue(ti.value));
+            TM.saveComment(
+                Number.parseInt(ti.dataset.idx!),
+                escapeValue(ti.value));
         });
     });
 
     app.querySelectorAll('.delete-btn').forEach((btn: Element) => {
         btn.addEventListener('click', (e) => {
             const target = e.target as HTMLElement;
-            const keyToDelete = target.dataset.key;
-            if (keyToDelete) {
-                vscode.postMessage({ type: 'DELETE_ENTRY', key: keyToDelete });
-            } else {
-                vscode.postMessage({ type: 'DELETE_COMMENT', commentIdx: target.dataset.commentkey });
-            }
+            const lineIdx = Number.parseInt(target.dataset.idx!);
+            vscode.postMessage({ type: 'DELETE_LINE', lineIdx });
         });
     });
 
@@ -271,9 +223,12 @@ function renderTable(entries: Record<string, string>) {
 }
 
 // --- 3. updateTable protegiendo el foco ---
-function updateTable(entries: Record<string, string>) {
-    const currentKeys = Array.from(app.querySelectorAll('tr[data-rowkey]')).map(tr => (tr as HTMLElement).dataset.rowkey);
-    const newKeys = Object.keys(entries);
+function updateTable(entries: [number, string, string][]) {
+    const currentKeys = Array.from(
+        app.querySelectorAll('tr[data-key]'))
+        .map(tr => (tr as HTMLElement).dataset.key! + (tr as HTMLElement).dataset.idx!);
+
+    const newKeys = entries.map(([idx, k,]) => idx.toString() + k);
 
     const activeEl = document.activeElement;
     const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
@@ -287,12 +242,12 @@ function updateTable(entries: Record<string, string>) {
         }
     }
 
-    Object.entries(entries).forEach(([k, v]) => {
+    entries.forEach(([idx, k, v]) => {
         const displayValue = unescapeValue(v);
 
         // 1. Lógica para COMENTARIOS
-        if (k.startsWith("#")) {
-            const commentInput = app.querySelector(`input[data-commentkey="${k}"]`) as HTMLInputElement;
+        if (k === "#") {
+            const commentInput = app.querySelector(`input[data-idx="${idx}"]`) as HTMLInputElement;
             if (commentInput && commentInput.value !== displayValue) {
                 // Protegemos el foco si el usuario está escribiendo justo en este comentario
                 if (document.activeElement === commentInput) { return; }
@@ -302,7 +257,7 @@ function updateTable(entries: Record<string, string>) {
         }
 
         // 2. Lógica para VALORES (Textarea)
-        const ta = app.querySelector(`textarea[data-key="${k}"]`) as HTMLTextAreaElement;
+        const ta = app.querySelector(`textarea[data-idx="${idx}"]`) as HTMLTextAreaElement;
         if (ta && ta.value !== displayValue) {
             if (document.activeElement === ta) { return; }
             ta.value = displayValue;
@@ -310,7 +265,7 @@ function updateTable(entries: Record<string, string>) {
         }
 
         // 3. Lógica para CLAVES (Input) - (Usado en el Undo general)
-        const inputEl = app.querySelector(`input[data-key="${k}"]`) as HTMLInputElement;
+        const inputEl = app.querySelector(`input[data-idx="${idx}"]`) as HTMLInputElement;
         if (inputEl && inputEl.value !== k && document.activeElement !== inputEl) {
             inputEl.value = k;
         }
@@ -319,7 +274,7 @@ function updateTable(entries: Record<string, string>) {
 
 // Función independiente para manejar el Drag and Drop
 function setupDragAndDrop() {
-    app.querySelectorAll('tr[data-rowkey]').forEach(tr => {
+    app.querySelectorAll('tr[data-key]').forEach(tr => {
         const row = tr as HTMLTableRowElement;
         const handle = row.querySelector('.drag-handle') as HTMLElement;
 
@@ -332,8 +287,7 @@ function setupDragAndDrop() {
             // Evitamos seleccionar texto por accidente al arrastrar
             e.preventDefault();
 
-            const sourceKey = row.dataset.rowkey;
-            if (!sourceKey) { return; }
+            const sourceIdx = Number.parseInt(row.dataset.idx!);
 
             // Coordenadas iniciales
             const startY = e.clientY;
@@ -356,7 +310,7 @@ function setupDragAndDrop() {
             // Marcamos la fila original como "en arrastre" (transparente)
             row.classList.add('dragging');
 
-            let targetKey: string | null = null;
+            let targetIdx: number | null = null;
             let insertAfter = false;
 
             const onMouseMove = (moveEvent: MouseEvent) => {
@@ -365,14 +319,18 @@ function setupDragAndDrop() {
                 ghost.style.top = `${startRect.top + deltaY}px`;
 
                 // Detectamos sobre qué fila estamos pasando verticalmente
-                const elementBelow = document.elementFromPoint(startRect.left + 50, moveEvent.clientY);
-                const targetTr = elementBelow?.closest('tr[data-rowkey]') as HTMLTableRowElement;
+                const clampedX = Math.min(
+                    Math.max(moveEvent.clientX, startRect.left + 1),
+                    startRect.left + startRect.width - 1
+                );
+                const elementBelow = document.elementFromPoint(clampedX, moveEvent.clientY);
+                const targetTr = elementBelow?.closest('tr[data-key]') as HTMLTableRowElement;
 
                 // Limpiamos indicadores visuales anteriores
                 app.querySelectorAll('tr').forEach(t => t.classList.remove('drag-over', 'drag-over-bottom'));
 
                 if (targetTr && targetTr !== row) {
-                    targetKey = targetTr.dataset.rowkey || null;
+                    targetIdx = Number.parseInt(targetTr.dataset.idx!);
                     const rect = targetTr.getBoundingClientRect();
                     const relY = moveEvent.clientY - rect.top;
 
@@ -382,8 +340,9 @@ function setupDragAndDrop() {
                     } else {
                         targetTr.classList.add('drag-over');
                     }
+
                 } else {
-                    targetKey = null;
+                    targetIdx = null;
                 }
             };
 
@@ -398,11 +357,11 @@ function setupDragAndDrop() {
                 app.querySelectorAll('tr').forEach(t => t.classList.remove('drag-over', 'drag-over-bottom'));
 
                 // Si hay un destino válido, disparamos el evento de movimiento a VS Code
-                if (targetKey && sourceKey !== targetKey) {
+                if (targetIdx !== null && sourceIdx !== targetIdx) {
                     vscode.postMessage({
                         type: 'MOVE_ENTRY',
-                        sourceKey: sourceKey,
-                        targetKey: targetKey,
+                        sourceIdx: sourceIdx,
+                        targetIdx: targetIdx,
                         insertAfter: insertAfter
                     });
                 }
@@ -429,15 +388,57 @@ window.addEventListener('message', (event: MessageEvent) => {
 });
 
 function unescapeValue(val: string): string {
-    try { return JSON.parse(`"${val.replace(/"/g, '\\"')}"`); } catch { return val; }
+    let out = '';
+    for (let i = 0; i < val.length; i++) {
+        if (val[i] === '\\' && i + 1 < val.length) {
+            const next = val[i + 1];
+            switch (next) {
+                case 'n': out += '\n'; i++; break;
+                case 't': out += '\t'; i++; break;
+                case 'r': out += '\r'; i++; break;
+                case '\\': out += '\\'; i++; break;
+                case ':': out += ':'; i++; break;
+                case '=': out += '='; i++; break;
+                case ' ': out += ' '; i++; break;
+                case 'u': {
+                    const hex = val.slice(i + 2, i + 6);
+                    if (/^[0-9a-fA-F]{4}$/.test(hex)) {
+                        out += String.fromCharCode(parseInt(hex, 16));
+                        i += 5;
+                    } else {
+                        out += next;
+                        i++;
+                    }
+                    break;
+                }
+                default:
+                    out += next;
+                    i++;
+            }
+        } else {
+            out += val[i];
+        }
+    }
+    return out;
 }
 
 function escapeValue(val: string): string {
-    return JSON.stringify(val).slice(1, -1).replace(/\\"/g, '"');
+    return val
+        .replace(/\\/g, '\\\\')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r')
+        .replace(/\t/g, '\\t')
+        .replace(/:/g, '\\:')
+        .replace(/=/g, '\\=');
 }
 
 function escapeHtml(unsafe: string) {
-    return unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return unsafe
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
 }
 
 function syncHighlight(ta: HTMLTextAreaElement) {

@@ -10,90 +10,149 @@ type LineType = string | Pair<string, string>;
 class Properties {
     private lines: LineType[];
     private document: vscode.TextDocument;
-    private editQueue = new EditQueue();
+    private editQueue: EditQueue;
+    public addedSinceLastUpdate = false;
 
-    constructor(lines: LineType[], document: vscode.TextDocument) {
+    private constructor(lines: LineType[], editQueue: EditQueue, document: vscode.TextDocument) {
         this.lines = lines;
+        this.editQueue = editQueue;
         this.document = document;
     }
 
-    public static parse(document: vscode.TextDocument): Properties {
-        const text = document.getText();
-        const parsedLines: LineType[] = [];
-        const rawLines = text.split(/\r?\n/);
+    public static async parse(document: vscode.TextDocument, editQueue: EditQueue) {
+        console.log(`parsing ${document.uri}`);
 
-        for (const line of rawLines) {
+        const text = document.getText();
+        const rawLines = text.split(/\r?\n/);
+        const parsedLines: LineType[] = [];
+
+        // Rangos [startLineNo, endLineNo] (líneas físicas originales) que hay que
+        // colapsar a una sola línea en el documento, con el texto ya combinado.
+        const collapseEdits: { startLineNo: number; endLineNo: number; flattened: string }[] = [];
+
+        let i = 0;
+        while (i < rawLines.length) {
+            const startLineNo = i;
+            let line = rawLines[i];
             const trimmed = line.trim();
+
+            // Comentarios y líneas vacías nunca tienen continuación
             if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('!')) {
                 parsedLines.push(line);
+                i++;
                 continue;
             }
 
-            const separatorMatch = /(?<!\\)[=:]/.exec(line);
+            let combined = line;
+            let endLineNo = startLineNo;
+
+            // Mientras la línea actual termine en '\' no escapado, únela con la siguiente
+            while (
+                /(?<!\\)(\\\\)*\\$/.test(combined) &&
+                endLineNo + 1 < rawLines.length
+            ) {
+                endLineNo++;
+                const next = rawLines[endLineNo];
+                // Quita la barra final y concatena, recortando espacios de cabecera
+                // de la línea continuada (comportamiento estándar de .properties)
+                combined = combined.slice(0, -1) + next.replace(/^\s+/, '');
+            }
+
+            const separatorMatch = /(?<!\\)[=:]/.exec(combined);
             if (separatorMatch) {
                 const separatorIdx = separatorMatch.index;
-                const key = line.slice(0, separatorIdx);
-                const value = line.slice(separatorIdx + 1);
+                const key = combined.slice(0, separatorIdx);
+                const value = combined.slice(separatorIdx + 1);
                 parsedLines.push(new Pair(key, value));
             } else {
-                parsedLines.push(line);
+                parsedLines.push(combined);
             }
+
+            // Si abarcaba más de una línea física, hay que normalizar el documento
+            if (endLineNo > startLineNo) {
+                collapseEdits.push({ startLineNo, endLineNo, flattened: combined });
+            }
+
+            i = endLineNo + 1;
         }
 
-        return new Properties(parsedLines, document);
+        // Si había entradas multilínea, reescribimos el documento para que
+        // pasen a ocupar una única línea física, y así garantizamos que
+        // this.lines vuelve a alinearse 1:1 con las líneas del documento
+        // tan pronto como este edit se aplique.
+        if (collapseEdits.length > 0) {
+            const edit = new vscode.WorkspaceEdit();
+
+            for (const { startLineNo, endLineNo, flattened } of collapseEdits) {
+                const range = new vscode.Range(
+                    new vscode.Position(startLineNo, 0),
+                    document.lineAt(endLineNo).range.end
+                );
+                edit.replace(document.uri, range, flattened);
+            }
+
+            console.log(`normalizing ${collapseEdits.length} multiline entr${collapseEdits.length === 1 ? 'y' : 'ies'} in ${document.uri}`);
+
+            await editQueue.push(() => edit);
+
+            console.log(`parsed ${document.uri}`);
+        }
+
+        return new Properties(parsedLines, editQueue, document);
     }
 
-    public editKey(oldKey: string, newKey: string): void {
-        const targetKey = oldKey.trim();
+    public editKey(lineIdx: number, newKey: string): void {
+        if (lineIdx < 0 || lineIdx >= this.lines.length) { return; }
+        const entry = this.lines[lineIdx];
+        if (!(entry instanceof Pair)) { return; }
+        const line = entry;
 
-        for (let i = 0; i < this.lines.length; i++) {
-            const line = this.lines[i];
-            if (line instanceof Pair && line.first.trim() === targetKey) {
-                const leadingSpaces = line.first.length - line.first.trimStart().length;
-                const keyStart = leadingSpaces;
-                const keyEnd = leadingSpaces + line.first.trim().length;
+        const leadingSpaces = line.first.length - line.first.trimStart().length;
+        const trailingSpaces = line.first.length - line.first.trimEnd().length;
+        const keyStart = leadingSpaces;
+        const keyEnd = line.first.length - trailingSpaces;
 
-                const range = new vscode.Range(
-                    new vscode.Position(i, keyStart),
-                    new vscode.Position(i, keyEnd)
-                );
+        const range = new vscode.Range(
+            new vscode.Position(lineIdx, keyStart),
+            new vscode.Position(lineIdx, keyEnd)
+        );
 
-                const edit = new vscode.WorkspaceEdit();
-                edit.replace(this.document.uri, range, newKey);
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(this.document.uri, range, newKey);
 
-                line.first = line.first.slice(0, leadingSpaces) + newKey;
+        // Conserva los espacios de cabecera/cola originales alrededor de la nueva clave
+        line.first =
+            line.first.slice(0, leadingSpaces) +
+            newKey +
+            line.first.slice(line.first.length - trailingSpaces);
 
-                this.editQueue.push(() => vscode.workspace.applyEdit(edit));
-            }
-        }
+        this.editQueue.push(() => edit);
     }
 
-    public editValue(key: string, newValue: string): void {
-        const targetKey = key.trim();
+    public editValue(lineIdx: number, newValue: string): void {
+        if (lineIdx < 0 || lineIdx >= this.lines.length) { return; }
+        console.log(`editing ${lineIdx} value -> ${newValue}`);
+        const line = this.lines[lineIdx] as Pair<string, string>;
 
-        for (let i = 0; i < this.lines.length; i++) {
-            const line = this.lines[i];
-            if (line instanceof Pair && line.first.trim() === targetKey) {
-                const valueStart = line.first.length + 1;
-                const valueEnd = valueStart + line.second.length;
+        const valueStart = line.first.length + 1;
+        const valueEnd = valueStart + line.second.length;
 
-                const range = new vscode.Range(
-                    new vscode.Position(i, valueStart),
-                    new vscode.Position(i, valueEnd)
-                );
+        const range = new vscode.Range(
+            new vscode.Position(lineIdx, valueStart),
+            new vscode.Position(lineIdx, valueEnd)
+        );
 
-                const edit = new vscode.WorkspaceEdit();
-                edit.replace(this.document.uri, range, newValue);
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(this.document.uri, range, newValue);
 
-                line.second = newValue;
+        line.second = newValue;
 
-                this.editQueue.push(() => vscode.workspace.applyEdit(edit));
-            }
-        }
+        this.editQueue.push(() => edit);
     }
 
     public addKey(key: string, value: string, separator: string = '='): Promise<boolean> {
-        addedSinceLastUpdate = true;
+        console.log(`adding ${key}${separator}${value}`);
+        this.addedSinceLastUpdate = true;
 
         const newPair = new Pair(key, value);
         this.lines.push(newPair);
@@ -106,53 +165,28 @@ class Properties {
             const edit = new vscode.WorkspaceEdit();
             edit.insert(this.document.uri, lastLine.range.end, textToInsert);
 
-            return vscode.workspace.applyEdit(edit);
+            return edit;
         });
     }
 
-    public deleteKey(key: string): void {
-        const targetKey = key.trim();
+    public editComment(lineIdx: number, value: string): void {
+        if (lineIdx < 0 || lineIdx >= this.lines.length) { return; }
+        console.log(`editing ${lineIdx} comment -> ${value}`);
 
-        for (let i = 0; i < this.lines.length; i++) {
-            const line = this.lines[i];
-            if (line instanceof Pair && line.first.trim() === targetKey) {
-                // Seleccionamos la línea entera, incluyendo el salto de línea para no dejar huecos
-                let lineRange = this.document.lineAt(i).rangeIncludingLineBreak;
-                if (i > 0 && i === this.lines.length - 1) {
-                    lineRange = new vscode.Range(
-                        this.document.lineAt(i - 1).range.end,
-                        lineRange.end
-                    );
-                }
-                const edit = new vscode.WorkspaceEdit();
-                edit.delete(this.document.uri, lineRange);
-
-                // Actualizamos el estado interno
-                this.lines.splice(i, 1);
-
-                this.editQueue.push(() => vscode.workspace.applyEdit(edit));
-                break;
-            }
-        }
-    }
-
-    public editComment(commentIdx: string, newValue: string): void {
-        const currcom = this.getLineIndex(commentIdx);
-        if (currcom < 0) { return; }
-
-        let lineRange = this.document.lineAt(currcom).range;
+        let lineRange = this.document.lineAt(lineIdx).range;
 
         const edit = new vscode.WorkspaceEdit();
-        edit.replace(this.document.uri, lineRange, newValue);
+        edit.replace(this.document.uri, lineRange, value);
 
-        this.lines[currcom] = newValue;
+        this.lines[lineIdx] = value;
 
-        this.editQueue.push(() => vscode.workspace.applyEdit(edit));
+        this.editQueue.push(() => edit);
 
     }
 
     public addComment(comment: string): Promise<boolean> {
-        addedSinceLastUpdate = true;
+        console.log(`adding comment ${comment}`);
+        this.addedSinceLastUpdate = true;
 
         this.lines.push(comment);
 
@@ -163,21 +197,18 @@ class Properties {
             const textToInsert = (lastLine.text.length > 0 ? `\n` : "") + comment;
             const edit = new vscode.WorkspaceEdit();
             edit.insert(this.document.uri, lastLine.range.end, textToInsert);
-
-            return vscode.workspace.applyEdit(edit);
+            return edit;
         });
     }
 
-    public deleteComment(commentIdx: string): void {
-        const commentN = this.getLineIndex(commentIdx);
-
-        if (commentN < 0) { return; }
-
+    public deleteLine(lineIdx: number): void {
+        if (lineIdx < 0 || lineIdx >= this.lines.length) { return; }
+        console.log(`deleting ${lineIdx}`);
         // Seleccionamos la línea entera, incluyendo el salto de línea para no dejar huecos
-        let lineRange = this.document.lineAt(commentN).rangeIncludingLineBreak;
-        if (commentN > 0 && commentN === this.lines.length - 1) {
+        let lineRange = this.document.lineAt(lineIdx).rangeIncludingLineBreak;
+        if (lineIdx > 0 && lineIdx === this.lines.length - 1) {
             lineRange = new vscode.Range(
-                this.document.lineAt(commentN - 1).range.end,
+                this.document.lineAt(lineIdx - 1).range.end,
                 lineRange.end
             );
         }
@@ -185,15 +216,13 @@ class Properties {
         edit.delete(this.document.uri, lineRange);
 
         // Actualizamos el estado interno
-        this.lines.splice(commentN, 1);
+        this.lines.splice(lineIdx, 1);
 
-        this.editQueue.push(() => vscode.workspace.applyEdit(edit));
+        this.editQueue.push(() => edit);
     }
 
-    public moveEntry(sourceKey: string, targetKey: string, insertAfter: boolean): void {
-        const sourceIdx = this.getLineIndex(sourceKey);
-        const targetIdx = this.getLineIndex(targetKey);
-
+    public moveEntry(sourceIdx: number, targetIdx: number, insertAfter: boolean): void {
+        console.log(`moving ${sourceIdx} -> ${targetIdx}`);
         if (sourceIdx === -1 || targetIdx === -1 || sourceIdx === targetIdx) { return; }
 
         const finalTargetIdx = insertAfter ? targetIdx + 1 : targetIdx;
@@ -228,34 +257,18 @@ class Properties {
         if (sourceIdx < finalTargetIdx) { arrayInsertIdx--; } // Ajuste tras borrar el source
         this.lines.splice(arrayInsertIdx, 0, moved);
 
-        this.editQueue.push(() => vscode.workspace.applyEdit(edit));
+        this.editQueue.push(() => edit);
     }
 
-    private getLineIndex(key: string): number {
-        const target = key.trim();
-        let commentIdx = 0;
+    public entries(): [number, string, string][] {
+        const result: [number, string, string][] = [];
+
         for (let i = 0; i < this.lines.length; i++) {
             const line = this.lines[i];
             if (line instanceof Pair) {
-                if (line.first.trim() === target) { return i; }
+                result.push([i, line.first.trim(), line.second.trim()]);
             } else {
-                if (`#${commentIdx}` === target) { return i; }
-                commentIdx++;
-            }
-        }
-        return -1;
-    }
-
-    public entries(): Record<string, string> {
-        const result: Record<string, string> = {};
-        let comment = 0;
-
-        for (const line of this.lines) {
-            if (line instanceof Pair) {
-                result[line.first.trim()] = line.second.trim();
-            } else {
-                result[`#${comment}`] = line.trim();
-                comment++;
+                result.push([i, `#`, line.trim()]);
             }
         }
         return result;
@@ -268,16 +281,17 @@ class EditQueue {
     private queue: EditTask[] = [];
     private consuming: boolean = false;
 
-    public push(task: EditTask): Promise<boolean> {
+    public push(edit: () => vscode.WorkspaceEdit): Promise<boolean> {
         return new Promise((resolve, reject) => {
             this.queue.push(async () => {
                 try {
-                    const res = await task();
+                    const res = await vscode.workspace.applyEdit(edit());
                     resolve(res);
                     return res;
                 } catch (err) {
+                    console.error('applyEdit failed', err);
                     reject(err);
-                    throw err;
+                    return false;
                 }
             });
             this.consume();
@@ -298,8 +312,6 @@ class EditQueue {
         }
     }
 }
-
-let addedSinceLastUpdate = false;
 
 export class PropertiesEditorProvider implements vscode.CustomTextEditorProvider {
     public static register(context: vscode.ExtensionContext): vscode.Disposable {
@@ -325,24 +337,29 @@ export class PropertiesEditorProvider implements vscode.CustomTextEditorProvider
             enableScripts: true,
         };
 
-        let properties = Properties.parse(document);
+        const editQueue = new EditQueue();
+
+        let properties = await Properties.parse(document, editQueue);
 
         // 1. Renderizar el HTML inicial del Webview
         webviewPanel.webview.html = this.getHtmlForWebview(webviewPanel.webview);
 
         // 2. Enviar el contenido inicial parseado al Webview
+        let updateChain: Promise<void> = Promise.resolve();
+
         const updateWebview = () => {
-            // DEBE PARSEARSE SIEMPRE PARA RECUPERAR EL ESTADO REAL (VITAL PARA UNDO)
-            properties = Properties.parse(document);
-            webviewPanel.webview.postMessage({
-                type: addedSinceLastUpdate ? 'ADDED' : 'UPDATE_CONTENT',
-                entries: properties.entries(),
-            });
-            addedSinceLastUpdate = false;
+            updateChain = updateChain.then(async () => {
+                const wasAdded = properties.addedSinceLastUpdate;
+                properties = await Properties.parse(document, editQueue);
+                webviewPanel.webview.postMessage({
+                    type: wasAdded ? 'ADDED' : 'UPDATE_CONTENT',
+                    entries: properties.entries(),
+                });
+            }).catch(err => console.error('updateWebview failed', err));
         };
 
         // 3. Escuchar cambios si el archivo cambia externamente o por Undo/Redo
-        const changeDocumentSubscription = vscode.workspace.onDidChangeTextDocument((e) => {
+        const changeDocumentSubscription = vscode.workspace.onDidChangeTextDocument(async (e) => {
             if (e.document.uri.toString() === document.uri.toString() && e.contentChanges.length > 0) {
                 updateWebview();
             }
@@ -354,31 +371,34 @@ export class PropertiesEditorProvider implements vscode.CustomTextEditorProvider
 
         // 4. Escuchar modificaciones hechas por el usuario dentro del Webview
         webviewPanel.webview.onDidReceiveMessage((message) => {
-            switch (message.type) {
-                case 'UPDATE_ENTRY':
-                    properties.editValue(message.key, message.value);
-                    break;
-                case 'UPDATE_KEY':
-                    properties.editKey(message.oldKey, message.newKey);
-                    break;
-                case 'ADD_ENTRY':
-                    properties.addKey(message.key, message.value);
-                    break;
-                case 'DELETE_ENTRY':
-                    properties.deleteKey(message.key);
-                    break;
-                case 'UPDATE_COMMENT':
-                    properties.editComment(message.commentIdx, message.newValue);
-                    break;
-                case 'ADD_COMMENT':
-                    properties.addComment(message.comment);
-                    break;
-                case 'DELETE_COMMENT':
-                    properties.deleteComment(message.commentIdx);
-                    break;
-                case 'MOVE_ENTRY':
-                    properties.moveEntry(message.sourceKey, message.targetKey, message.insertAfter);
-                    break;
+            try {
+                switch (message.type) {
+                    case 'UPDATE_ENTRY':
+                        properties.editValue(message.lineIdx, message.value);
+                        break;
+                    case 'UPDATE_KEY':
+                        properties.editKey(message.lineIdx, message.newKey);
+                        break;
+                    case 'ADD_ENTRY':
+                        properties.addKey(message.key, message.value).catch(err =>
+                            console.error('addKey failed', err));
+                        break;
+                    case 'DELETE_LINE':
+                        properties.deleteLine(message.lineIdx);
+                        break;
+                    case 'UPDATE_COMMENT':
+                        properties.editComment(message.lineIdx, message.value);
+                        break;
+                    case 'ADD_COMMENT':
+                        properties.addComment(message.comment).catch(err =>
+                            console.error('addComment failed', err));
+                        break;
+                    case 'MOVE_ENTRY':
+                        properties.moveEntry(message.sourceIdx, message.targetIdx, message.insertAfter);
+                        break;
+                }
+            } catch (err) {
+                console.error('Error handling webview message', err);
             }
         });
 

@@ -2,7 +2,7 @@
   "name": "properties-viewer",
   "displayName": "Properties viewer",
   "description": "Custom properties viewer",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "engines": {
     "vscode": "^1.80.0"
   },
