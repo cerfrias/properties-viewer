@@ -1,19 +1,22 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="
-    default-src 'none';
-    style-src {{cspSource}} 'unsafe-inline';
-    script-src 'nonce-{{nonce}}';
-    connect-src {{cspSource}};
-  ">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="stylesheet" href="{{styleUri}}">
-  <title>Properties Editor</title>
+    <meta charset="UTF-8">
+    <!-- Tu Content-Security-Policy actual -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src {{cspSource}}; script-src 'nonce-{{nonce}}';">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="{{styleUri}}" rel="stylesheet">
+    <title>Properties Editor</title>
 </head>
 <body>
-  <div id="app"></div>
-  <script nonce="{{nonce}}" src="{{scriptUri}}"></script>
+    <!-- Aquí se renderizará la tabla -->
+    <div id="app"></div>
+
+    <!-- Botón fijo para añadir propiedades -->
+    <div class="add-row-container">
+        <button id="add-btn" class="vscode-btn">+ Add Property</button>
+    </div>
+    
+    <script nonce="{{nonce}}" src="{{scriptUri}}"></script>
 </body>
 </html>

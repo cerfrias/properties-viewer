@@ -1,0 +1,262 @@
+/* Reseteo básico y tipografía del editor */
+body {
+  padding: 16px;
+  margin: 0;
+  color: var(--vscode-editor-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  background-color: var(--vscode-editor-background);
+}
+
+/* Contenedor de la tabla */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  table-layout: fixed;
+}
+
+/* Cabeceras y celdas base */
+th {
+  padding: 8px 12px;
+  font-weight: 600;
+  border-bottom: 2px solid var(--vscode-panel-border);
+  text-transform: uppercase;
+  font-size: 0.9em;
+  opacity: 0.8;
+}
+
+td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  vertical-align: middle;
+}
+
+/* Columna de las Claves (Key) */
+th:nth-child(1),
+td:nth-child(1) {
+  width: 25%;
+  padding-right: 16px;
+}
+
+/* Estilo específico para el texto de la clave */
+td:nth-child(1) {
+  font-family: var(--vscode-editor-font-family);
+  font-weight: bold;
+  word-wrap: break-word;
+}
+
+/* Columna de los Valores (Value) */
+th:nth-child(2),
+td:nth-child(2) {
+  width: 70%;
+}
+
+/* Columna de Acciones (Eliminar) */
+th:nth-child(3),
+td:nth-child(3) {
+  width: 5%;
+  text-align: center;
+  vertical-align: top;
+  padding-top: 6px; /* Para alinearlo con los inputs */
+}
+
+/* Efecto hover en las filas para facilitar la lectura */
+tbody tr:hover {
+  background-color: var(--vscode-list-hoverBackground);
+}
+
+
+/* --- LÓGICA DEL EDITOR SOLAPADO --- */
+
+.editor-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+/* Base compartida para alinear exactamente texto de fondo y textarea */
+.editor-wrapper textarea,
+.editor-wrapper pre,
+.editor-wrapper code {
+  font-family: var(--vscode-editor-font-family), monospace !important;
+  font-size: var(--vscode-editor-font-size, 14px) !important;
+  line-height: 1.5 !important;
+  tab-size: 4;
+  white-space: pre-wrap !important;
+  word-wrap: break-word !important;
+}
+
+/* El fondo visual (Highlight.js) */
+.editor-wrapper pre {
+  position: relative;
+  width: 100%;
+  min-height: 34px;
+  margin: 0 !important;
+  padding: 6px 8px !important;
+  box-sizing: border-box;
+  
+  background-color: var(--vscode-input-background) !important;
+  color: var(--vscode-input-foreground);
+  border: 1px solid transparent;
+  border-radius: 2px;
+  
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* El input interactivo transparente (Textarea) */
+.editor-wrapper textarea {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  padding: 6px 8px;
+  margin: 0;
+  box-sizing: border-box;
+  
+  /* Truco: Texto invisible, pero cursor visible */
+  color: transparent !important;
+  background-color: transparent !important;
+  caret-color: var(--vscode-input-foreground); 
+  
+  border: 1px solid transparent;
+  border-radius: 2px;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  
+  z-index: 1;
+}
+
+/* Bordes interactivos */
+.editor-wrapper:hover textarea { border-color: var(--vscode-input-border); }
+.editor-wrapper textarea:focus { border-color: var(--vscode-focusBorder); }
+
+/* Reseteo agresivo de los estilos por defecto de highlight.js */
+.editor-wrapper code.hljs {
+  padding: 0 !important;
+  margin: 0 !important;
+  background: transparent !important;
+  /* Asegurar que el comportamiento de salto de línea se herede bien */
+  white-space: pre-wrap !important;
+  word-wrap: break-word !important;
+}
+
+/* Corrige el color de la selección de texto para que sea semitransparente */
+.editor-wrapper textarea::selection {
+  background-color: rgba(100, 150, 255, 0.3);
+  background-color: color-mix(in srgb, var(--vscode-editor-selectionBackground) 40%, transparent);
+  color: transparent; 
+}
+
+/* --- ESTILOS PARA EL INPUT (KEY) --- */
+td input[type="text"] {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  color: var(--vscode-input-foreground);
+  background-color: var(--vscode-input-background);
+  border: 1px solid transparent;
+  border-radius: 2px;
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size, 14px);
+  outline: none;
+  transition: border-color 0.1s;
+}
+
+/* Efecto Hover */
+td input[type="text"]:hover {
+  border-color: var(--vscode-input-border, rgba(128, 128, 128, 0.3));
+}
+
+/* Efecto Foco Nativo VS Code */
+td input[type="text"]:focus {
+  border-color: var(--vscode-focusBorder);
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px; /* Hace que el outline dibuje hacia dentro, sin alterar el layout */
+}
+
+/* --- ESTILOS PARA COMENTARIOS Y LÍNEAS EN BLANCO --- */
+.comment-cell {
+  /* Reducimos un poco el padding vertical para que los bloques de comentarios se vean más juntos */
+  padding: 4px 12px !important; 
+  background-color: transparent;
+}
+
+.comment-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  
+  /* Aspecto de comentario inactivo */
+  background-color: transparent !important;
+  border: 1px solid transparent !important;
+  
+  /* Usamos un color verde clásico de comentarios con fallback al tema de VS Code */
+  color: var(--vscode-textBlockQuote-border, #6A9955) !important; 
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size, 14px);
+  font-style: italic;
+  opacity: 0.8;
+  
+  outline: none;
+  pointer-events: none; /* Evita que el usuario intente clickar para editar */
+}
+
+/* Si el comentario está vacío (línea en blanco), aseguramos que ocupe espacio */
+.comment-input[value=""] {
+  min-height: 24px;
+}
+
+/* --- BOTONES DE ACCIÓN (Añadir y Eliminar) --- */
+
+/* Contenedor y Botón de Añadir Propiedad */
+.add-row-container {
+  margin-top: 20px;
+  margin-bottom: 40px;
+  text-align: left;
+}
+
+#add-btn {
+  scroll-margin-bottom: 40px;
+}
+
+.vscode-btn {
+  background-color: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border: 1px solid transparent;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 2px;
+  font-family: var(--vscode-font-family);
+  transition: background-color 0.1s;
+}
+
+.vscode-btn:hover {
+  background-color: var(--vscode-button-hoverBackground);
+}
+
+/* Botón de Eliminar (X) */
+.delete-btn {
+  background: transparent;
+  color: var(--vscode-icon-foreground, #C5C5C5);
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  opacity: 0.4;
+  transition: opacity 0.2s, background-color 0.2s, color 0.2s;
+}
+
+tr:hover .delete-btn {
+  opacity: 1; /* Solo mostramos la 'X' cuando pasas el ratón por la fila */
+}
+
+.delete-btn:hover {
+  background-color: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, 0.31));
+  color: var(--vscode-errorForeground, #F14C4C);
+}
