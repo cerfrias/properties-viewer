@@ -93,7 +93,7 @@ class Properties {
     }
 
     public addKey(key: string, value: string, separator: string = '='): Promise<boolean> {
-        addedKeySinceLastUpdate = true;
+        addedSinceLastUpdate = true;
 
         const newPair = new Pair(key, value);
         this.lines.push(newPair);
@@ -115,11 +115,10 @@ class Properties {
 
         for (let i = 0; i < this.lines.length; i++) {
             const line = this.lines[i];
-            // Solo borramos si es un par Key-Value (ignoramos comentarios de momento)
             if (line instanceof Pair && line.first.trim() === targetKey) {
                 // Seleccionamos la línea entera, incluyendo el salto de línea para no dejar huecos
                 let lineRange = this.document.lineAt(i).rangeIncludingLineBreak;
-                if (i === this.lines.length - 1) {
+                if (i > 0 && i === this.lines.length - 1) {
                     lineRange = new vscode.Range(
                         this.document.lineAt(i - 1).range.end,
                         lineRange.end
@@ -135,6 +134,116 @@ class Properties {
                 break;
             }
         }
+    }
+
+    public editComment(commentIdx: string, newValue: string): void {
+        const currcom = this.getLineIndex(commentIdx);
+        if (currcom < 0) { return; }
+
+        let lineRange = this.document.lineAt(currcom).range;
+
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(this.document.uri, lineRange, newValue);
+
+        this.lines[currcom] = newValue;
+
+        this.editQueue.push(() => vscode.workspace.applyEdit(edit));
+
+    }
+
+    public addComment(comment: string): Promise<boolean> {
+        addedSinceLastUpdate = true;
+
+        this.lines.push(comment);
+
+        return this.editQueue.push(() => {
+            const lastLineIndex = Math.max(0, this.document.lineCount - 1);
+            const lastLine = this.document.lineAt(lastLineIndex);
+
+            const textToInsert = (lastLine.text.length > 0 ? `\n` : "") + comment;
+            const edit = new vscode.WorkspaceEdit();
+            edit.insert(this.document.uri, lastLine.range.end, textToInsert);
+
+            return vscode.workspace.applyEdit(edit);
+        });
+    }
+
+    public deleteComment(commentIdx: string): void {
+        const commentN = this.getLineIndex(commentIdx);
+
+        if (commentN < 0) { return; }
+
+        // Seleccionamos la línea entera, incluyendo el salto de línea para no dejar huecos
+        let lineRange = this.document.lineAt(commentN).rangeIncludingLineBreak;
+        if (commentN > 0 && commentN === this.lines.length - 1) {
+            lineRange = new vscode.Range(
+                this.document.lineAt(commentN - 1).range.end,
+                lineRange.end
+            );
+        }
+        const edit = new vscode.WorkspaceEdit();
+        edit.delete(this.document.uri, lineRange);
+
+        // Actualizamos el estado interno
+        this.lines.splice(commentN, 1);
+
+        this.editQueue.push(() => vscode.workspace.applyEdit(edit));
+    }
+
+    public moveEntry(sourceKey: string, targetKey: string, insertAfter: boolean): void {
+        const sourceIdx = this.getLineIndex(sourceKey);
+        const targetIdx = this.getLineIndex(targetKey);
+
+        if (sourceIdx === -1 || targetIdx === -1 || sourceIdx === targetIdx) { return; }
+
+        const finalTargetIdx = insertAfter ? targetIdx + 1 : targetIdx;
+        const sourceLine = this.document.lineAt(sourceIdx);
+        const textToMove = sourceLine.text;
+
+        const edit = new vscode.WorkspaceEdit();
+
+        // 1. Borrar la línea original
+        let delRange = sourceLine.rangeIncludingLineBreak;
+        if (sourceIdx > 0 && sourceIdx === this.lines.length - 1) {
+            delRange = new vscode.Range(
+                this.document.lineAt(sourceIdx - 1).range.end,
+                delRange.end
+            );
+        }
+        edit.delete(this.document.uri, delRange);
+
+        // 2. Insertar en el nuevo destino
+        if (finalTargetIdx >= this.lines.length) {
+            // Si va al final del archivo, lo añadimos detrás de la última línea
+            const lastLine = this.document.lineAt(this.document.lineCount - 1);
+            edit.insert(this.document.uri, lastLine.range.end, '\n' + textToMove);
+        } else {
+            // Si va entre medias, lo insertamos al principio de la línea objetivo
+            edit.insert(this.document.uri, new vscode.Position(finalTargetIdx, 0), textToMove + '\n');
+        }
+
+        // 3. Actualizar la matriz interna para mantener la consistencia en el backend
+        const [moved] = this.lines.splice(sourceIdx, 1);
+        let arrayInsertIdx = finalTargetIdx;
+        if (sourceIdx < finalTargetIdx) { arrayInsertIdx--; } // Ajuste tras borrar el source
+        this.lines.splice(arrayInsertIdx, 0, moved);
+
+        this.editQueue.push(() => vscode.workspace.applyEdit(edit));
+    }
+
+    private getLineIndex(key: string): number {
+        const target = key.trim();
+        let commentIdx = 0;
+        for (let i = 0; i < this.lines.length; i++) {
+            const line = this.lines[i];
+            if (line instanceof Pair) {
+                if (line.first.trim() === target) { return i; }
+            } else {
+                if (`#${commentIdx}` === target) { return i; }
+                commentIdx++;
+            }
+        }
+        return -1;
     }
 
     public entries(): Record<string, string> {
@@ -190,7 +299,7 @@ class EditQueue {
     }
 }
 
-let addedKeySinceLastUpdate = false;
+let addedSinceLastUpdate = false;
 
 export class PropertiesEditorProvider implements vscode.CustomTextEditorProvider {
     public static register(context: vscode.ExtensionContext): vscode.Disposable {
@@ -226,10 +335,10 @@ export class PropertiesEditorProvider implements vscode.CustomTextEditorProvider
             // DEBE PARSEARSE SIEMPRE PARA RECUPERAR EL ESTADO REAL (VITAL PARA UNDO)
             properties = Properties.parse(document);
             webviewPanel.webview.postMessage({
-                type: addedKeySinceLastUpdate ? 'ADDED_KEY' : 'UPDATE_CONTENT',
+                type: addedSinceLastUpdate ? 'ADDED' : 'UPDATE_CONTENT',
                 entries: properties.entries(),
             });
-            addedKeySinceLastUpdate = false;
+            addedSinceLastUpdate = false;
         };
 
         // 3. Escuchar cambios si el archivo cambia externamente o por Undo/Redo
@@ -257,6 +366,18 @@ export class PropertiesEditorProvider implements vscode.CustomTextEditorProvider
                     break;
                 case 'DELETE_ENTRY':
                     properties.deleteKey(message.key);
+                    break;
+                case 'UPDATE_COMMENT':
+                    properties.editComment(message.commentIdx, message.newValue);
+                    break;
+                case 'ADD_COMMENT':
+                    properties.addComment(message.comment);
+                    break;
+                case 'DELETE_COMMENT':
+                    properties.deleteComment(message.commentIdx);
+                    break;
+                case 'MOVE_ENTRY':
+                    properties.moveEntry(message.sourceKey, message.targetKey, message.insertAfter);
                     break;
             }
         });

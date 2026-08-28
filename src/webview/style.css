@@ -32,38 +32,71 @@ td {
   vertical-align: middle;
 }
 
-/* Columna de las Claves (Key) */
-th:nth-child(1),
-td:nth-child(1) {
+/* Columna 1: Manillar de Arrastre */
+th:nth-child(1), td:nth-child(1) {
+  width: 4%;
+  text-align: center;
+  padding-right: 8px;
+}
+
+/* Columna 2: Claves (Key) */
+th:nth-child(2), td:nth-child(2) {
   width: 25%;
   padding-right: 16px;
 }
 
-/* Estilo específico para el texto de la clave */
-td:nth-child(1) {
+td:nth-child(2) {
   font-family: var(--vscode-editor-font-family);
   font-weight: bold;
   word-wrap: break-word;
 }
 
-/* Columna de los Valores (Value) */
-th:nth-child(2),
-td:nth-child(2) {
-  width: 70%;
+/* Columna 3: Valores (Value) */
+th:nth-child(3), td:nth-child(3) {
+  width: 66%;
 }
 
-/* Columna de Acciones (Eliminar) */
-th:nth-child(3),
-td:nth-child(3) {
+/* Columna 4: Acciones (Eliminar) */
+th:nth-child(4), td:nth-child(4) {
   width: 5%;
   text-align: center;
   vertical-align: top;
-  padding-top: 6px; /* Para alinearlo con los inputs */
+  padding-top: 6px;
 }
 
-/* Efecto hover en las filas para facilitar la lectura */
-tbody tr:hover {
-  background-color: var(--vscode-list-hoverBackground);
+/* --- DRAG AND DROP (Añade esto al final del archivo) --- */
+
+/* El manillar indica claramente que se puede agarrar */
+.drag-handle {
+  cursor: grab;
+  color: var(--vscode-icon-foreground, #C5C5C5);
+  opacity: 0.3;
+  user-select: none;
+  font-size: 16px;
+  text-align: center;
+  transition: opacity 0.2s;
+}
+
+tr:hover .drag-handle {
+  opacity: 0.8;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Fila original que se queda atrás al arrastrar (transparente) */
+tr.dragging {
+  opacity: 0.2;
+}
+
+/* Indicadores de posición de destino (líneas azules) */
+tr.drag-over td {
+  border-top: 2px solid var(--vscode-focusBorder) !important;
+}
+
+tr.drag-over-bottom td {
+  border-bottom: 2px solid var(--vscode-focusBorder) !important;
 }
 
 
@@ -201,7 +234,6 @@ td input[type="text"]:focus {
   opacity: 0.8;
   
   outline: none;
-  pointer-events: none; /* Evita que el usuario intente clickar para editar */
 }
 
 /* Si el comentario está vacío (línea en blanco), aseguramos que ocupe espacio */
@@ -216,6 +248,8 @@ td input[type="text"]:focus {
   margin-top: 20px;
   margin-bottom: 40px;
   text-align: left;
+  display: flex;
+  gap: 8px;
 }
 
 #add-btn {
