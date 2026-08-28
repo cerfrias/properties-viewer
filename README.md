@@ -8,8 +8,6 @@ Auto-highlights values if they represent code.
 
 ## Release Notes
 
-Users appreciate release notes as you update your extension.
-
 ### 0.1.0
 
 Initial release of viewer
