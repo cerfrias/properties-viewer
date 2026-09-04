@@ -6,9 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [0.2.1] - 2026-09-04
+
+### Fixed
+- **Key Renaming**: Fixed an issue where renaming property keys did not work due to a missing row index attribute on key input elements.
+- **Table Synchronization**: Fixed key comparison formatting in `updateTable` to ensure accurate row tracking and prevent state mismatches.
+- **Immediate Save on Blur**: Added instant save upon leaving key inputs, value textareas, and comment fields instead of waiting for debounce timeout.
+- **Key Input Shortcuts**: Added in-cell Undo/Redo (`Ctrl+Z`, `Ctrl+Y`, `Cmd+Z`, `Cmd+Shift+Z`) support to key input fields.
+- **Boundary Checks in Parser**: Added validation against `NaN` indices and document line counts in `editKey`.
+
+---
+
 ## [0.2.0] - 2026-08-28
 
 ### Added
+
 - **Drag-and-Drop Reordering**: Added interactive drag handles (`⠿`) and drop indicators (`drag-over`, `drag-over-bottom`) to reorder keys and comments directly in the table.
 - **Comment Support**: Full support for `#` and `!` comment lines spanning across the table with inline editing.
 - **Add Comment Action**: Dedicated `+ Add Comment` button to easily insert comments into the file.
@@ -20,6 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Multi-line Continuation Normalization**: Physical lines joined with trailing backslashes (`\`) are normalized into multi-line entries on parse.
 
 ### Changed
+
 - **Asynchronous Edit Queue**: Implemented `EditQueue` and debounced input events to prevent race conditions and focus loss during fast typing.
 - **UI Enhancements**: Refined hover and focus states using native VS Code CSS variables (`--vscode-focusBorder`, `--vscode-input-background`, etc.).
 
@@ -28,10 +41,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [0.1.1] - 2026-08-28
 
 ### Added
+
 - Included repository URL and publisher configuration in `package.json`.
 - Added standard MIT `LICENSE` file.
 
 ### Fixed
+
 - Fixed extension display name to `Properties viewer`.
 
 ---
@@ -39,9 +54,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [0.1.0] - 2026-08-28
 
 ### Added
+
 - Initial release of **Properties Viewer** custom editor (`propertiesCustom.editor`) for `*.properties` files.
 - Spreadsheet-like visual table layout for keys and values.
 - Real-time syntax highlighting for values using `highlight.js` (vs2015 theme).
 - Multi-line value support with automatic serialization and deserialization.
 - Add and delete row actions.
-

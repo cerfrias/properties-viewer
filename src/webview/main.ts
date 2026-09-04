@@ -50,8 +50,13 @@ class timeoutManager {
         this.timeouts.set(this.key(type, lineIdx), { id: tmId, type, lineIdx, value });
     }
 
-    public renameKey(lineIdx: number, newKey: string) {
+    public renameKey(lineIdx: number, newKey: string, immediate: boolean = false) {
         clearTimeout(this.timeouts.get(this.key("KEY", lineIdx))?.id);
+
+        if (immediate) {
+            vscode.postMessage({ type: 'UPDATE_KEY', lineIdx, newKey });
+            return;
+        }
 
         this.set("KEY",
             window.setTimeout(() => {
@@ -62,8 +67,13 @@ class timeoutManager {
         );
     }
 
-    public saveValue(lineIdx: number, value: string) {
+    public saveValue(lineIdx: number, value: string, immediate: boolean = false) {
         clearTimeout(this.timeouts.get(this.key("VALUE", lineIdx))?.id);
+
+        if (immediate) {
+            vscode.postMessage({ type: 'UPDATE_ENTRY', lineIdx, value });
+            return;
+        }
 
         this.set("VALUE",
             window.setTimeout(() => {
@@ -74,8 +84,13 @@ class timeoutManager {
         );
     }
 
-    public saveComment(lineIdx: number, value: string) {
+    public saveComment(lineIdx: number, value: string, immediate: boolean = false) {
         clearTimeout(this.timeouts.get(this.key("COMMENT", lineIdx))?.id);
+
+        if (immediate) {
+            vscode.postMessage({ type: 'UPDATE_COMMENT', lineIdx, value });
+            return;
+        }
 
         this.set("COMMENT",
             window.setTimeout(() => {
@@ -120,7 +135,7 @@ function renderTable(entries: [number, string, string][]) {
                 :
                 `
                 <!-- Fila normal de Key / Value -->
-                <td><input type="text" data-key="${escapeHtml(k)}" value="${escapeHtml(k)}"></td>
+                <td><input class="key-input" type="text" data-idx="${idx}" data-key="${escapeHtml(k)}" value="${escapeHtml(k)}"></td>
                 <td>
                   <div class="editor-wrapper">
                     <textarea data-idx="${idx}" spellcheck="false" rows="1">${escapeHtml(displayValue)}</textarea>
@@ -167,21 +182,59 @@ function renderTable(entries: [number, string, string][]) {
 
         ta.addEventListener('input', () => {
             syncHighlight(ta);
-            TM.saveValue(Number.parseInt(ta.dataset.idx!), escapeValue(ta.value));
+            const idx = Number.parseInt(ta.dataset.idx!);
+            if (!Number.isNaN(idx)) {
+                TM.saveValue(idx, escapeValue(ta.value));
+            }
+        });
+
+        ta.addEventListener('blur', () => {
+            const idx = Number.parseInt(ta.dataset.idx!);
+            if (!Number.isNaN(idx)) {
+                TM.saveValue(idx, escapeValue(ta.value), true);
+            }
         });
     });
 
-    app.querySelectorAll('input[type="text"]:not(.comment-input)').forEach((ti: Element) => {
+    app.querySelectorAll('input.key-input').forEach((ti: Element) => {
         const inputEl = ti as HTMLInputElement;
 
+        inputEl.addEventListener('keydown', (e: Event) => {
+            const keyboardEvent = e as KeyboardEvent;
+            const isMac = navigator.platform.toUpperCase().includes('MAC');
+            const modifier = isMac ? keyboardEvent.metaKey : keyboardEvent.ctrlKey;
+
+            if (modifier && keyboardEvent.key.toLowerCase() === 'z') {
+                keyboardEvent.preventDefault();
+                keyboardEvent.stopPropagation();
+                if (keyboardEvent.shiftKey) { document.execCommand('redo'); }
+                else { document.execCommand('undo'); }
+                return;
+            }
+            if (modifier && keyboardEvent.key.toLowerCase() === 'y') {
+                keyboardEvent.preventDefault();
+                keyboardEvent.stopPropagation();
+                document.execCommand('redo');
+                return;
+            }
+        });
+
         inputEl.addEventListener('input', () => {
-            TM.renameKey(
-                Number.parseInt(inputEl.dataset.idx!),
-                inputEl.value);
+            const idx = Number.parseInt(inputEl.dataset.idx!);
+            if (!Number.isNaN(idx)) {
+                TM.renameKey(idx, inputEl.value);
+            }
+        });
+
+        inputEl.addEventListener('blur', () => {
+            const idx = Number.parseInt(inputEl.dataset.idx!);
+            if (!Number.isNaN(idx)) {
+                TM.renameKey(idx, inputEl.value, true);
+            }
         });
     });
 
-    app.querySelectorAll('input[type="text"].comment-input').forEach((tie) => {
+    app.querySelectorAll('input.comment-input').forEach((tie) => {
         const ti = tie as HTMLInputElement;
 
         ti.addEventListener('keydown', (e: Event) => {
@@ -205,9 +258,17 @@ function renderTable(entries: [number, string, string][]) {
         });
 
         ti.addEventListener('input', () => {
-            TM.saveComment(
-                Number.parseInt(ti.dataset.idx!),
-                escapeValue(ti.value));
+            const idx = Number.parseInt(ti.dataset.idx!);
+            if (!Number.isNaN(idx)) {
+                TM.saveComment(idx, escapeValue(ti.value));
+            }
+        });
+
+        ti.addEventListener('blur', () => {
+            const idx = Number.parseInt(ti.dataset.idx!);
+            if (!Number.isNaN(idx)) {
+                TM.saveComment(idx, escapeValue(ti.value), true);
+            }
         });
     });
 
@@ -226,16 +287,16 @@ function renderTable(entries: [number, string, string][]) {
 function updateTable(entries: [number, string, string][]) {
     const currentKeys = Array.from(
         app.querySelectorAll('tr[data-key]'))
-        .map(tr => (tr as HTMLElement).dataset.key! + (tr as HTMLElement).dataset.idx!);
+        .map(tr => `${(tr as HTMLElement).dataset.idx}:${(tr as HTMLElement).dataset.key}`);
 
-    const newKeys = entries.map(([idx, k,]) => idx.toString() + k);
+    const newKeys = entries.map(([idx, k]) => `${idx}:${k}`);
 
     const activeEl = document.activeElement;
     const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
 
     if (currentKeys.join(',') !== newKeys.join(',')) {
         if (isTyping && currentKeys.length === newKeys.length) {
-            // Ignoramos la actualización visual para no robar foco en el renombrado
+            // Ignoramos la recreación del DOM para no robar foco mientras se escribe
         } else {
             renderTable(entries);
             return;
@@ -245,9 +306,15 @@ function updateTable(entries: [number, string, string][]) {
     entries.forEach(([idx, k, v]) => {
         const displayValue = unescapeValue(v);
 
+        // Mantenemos sincronizado el data-key del <tr>
+        const tr = app.querySelector(`tr[data-idx="${idx}"]`) as HTMLTableRowElement;
+        if (tr) {
+            tr.dataset.key = k;
+        }
+
         // 1. Lógica para COMENTARIOS
         if (k === "#") {
-            const commentInput = app.querySelector(`input[data-idx="${idx}"]`) as HTMLInputElement;
+            const commentInput = app.querySelector(`input.comment-input[data-idx="${idx}"]`) as HTMLInputElement;
             if (commentInput && commentInput.value !== displayValue) {
                 // Protegemos el foco si el usuario está escribiendo justo en este comentario
                 if (document.activeElement === commentInput) { return; }
@@ -264,10 +331,13 @@ function updateTable(entries: [number, string, string][]) {
             syncHighlight(ta);
         }
 
-        // 3. Lógica para CLAVES (Input) - (Usado en el Undo general)
-        const inputEl = app.querySelector(`input[data-idx="${idx}"]`) as HTMLInputElement;
-        if (inputEl && inputEl.value !== k && document.activeElement !== inputEl) {
-            inputEl.value = k;
+        // 3. Lógica para CLAVES (Input) - (Usado en el Undo general o cambios externos)
+        const inputEl = app.querySelector(`input.key-input[data-idx="${idx}"]`) as HTMLInputElement;
+        if (inputEl) {
+            inputEl.dataset.key = k;
+            if (inputEl.value !== k && document.activeElement !== inputEl) {
+                inputEl.value = k;
+            }
         }
     });
 }

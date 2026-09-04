@@ -102,13 +102,16 @@ class Properties {
     }
 
     public editKey(lineIdx: number, newKey: string): void {
-        if (lineIdx < 0 || lineIdx >= this.lines.length) { return; }
+        if (typeof lineIdx !== 'number' || isNaN(lineIdx)) { return; }
+        if (lineIdx < 0 || lineIdx >= this.lines.length || lineIdx >= this.document.lineCount) { return; }
         const entry = this.lines[lineIdx];
         if (!(entry instanceof Pair)) { return; }
+        console.log(`editing ${lineIdx} key -> ${newKey}`);
         const line = entry;
 
-        const leadingSpaces = line.first.length - line.first.trimStart().length;
-        const trailingSpaces = line.first.length - line.first.trimEnd().length;
+        const trimmed = line.first.trim();
+        const leadingSpaces = trimmed ? line.first.indexOf(trimmed) : 0;
+        const trailingSpaces = trimmed ? line.first.length - (leadingSpaces + trimmed.length) : 0;
         const keyStart = leadingSpaces;
         const keyEnd = line.first.length - trailingSpaces;
 
@@ -121,10 +124,9 @@ class Properties {
         edit.replace(this.document.uri, range, newKey);
 
         // Conserva los espacios de cabecera/cola originales alrededor de la nueva clave
-        line.first =
-            line.first.slice(0, leadingSpaces) +
-            newKey +
-            line.first.slice(line.first.length - trailingSpaces);
+        const prefix = line.first.slice(0, leadingSpaces);
+        const suffix = trailingSpaces > 0 ? line.first.slice(line.first.length - trailingSpaces) : '';
+        line.first = prefix + newKey + suffix;
 
         this.editQueue.push(() => edit);
     }
